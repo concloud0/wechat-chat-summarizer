@@ -53,6 +53,32 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(len(result.ignored_line_samples), 20)
         self.assertLessEqual(len(result.ignored_line_samples[0][1]), 240)
 
+    def test_long_wechat_display_name_is_parsed_as_independent_message(self):
+        long_name = "项目超级长昵称用户" * 6
+        result = summarizer.parse_chat_with_stats(
+            f"""2026-06-01 08:59:00 张三: 前一条
+2026-06-01 09:00:00 {long_name}: 这是一条有效消息
+"""
+        )
+
+        self.assertEqual(result.ignored_lines, 0)
+        self.assertEqual(len(result.messages), 2)
+        self.assertEqual(result.messages[1].speaker, long_name)
+        self.assertNotIn(long_name, result.messages[0].content)
+
+    def test_timestamp_like_invalid_line_is_not_appended_to_previous_message(self):
+        result = summarizer.parse_chat_with_stats(
+            """2026-06-01 08:59:00 张三: 前一条
+2026-13-01 09:00:00 王五: 错误日期
+这是前一条的补充说明
+"""
+        )
+
+        self.assertEqual(result.ignored_lines, 1)
+        self.assertEqual(len(result.messages), 1)
+        self.assertIn("补充说明", result.messages[0].content)
+        self.assertNotIn("错误日期", result.messages[0].content)
+
 
 class EncodingTests(unittest.TestCase):
     def test_read_text_auto_detects_gb18030(self):
@@ -200,6 +226,21 @@ class DeepSeekTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["max_tokens"], 8)
         self.assertEqual(captured["payload"]["thinking"], {"type": "disabled"})
         self.assertEqual(captured["payload"]["messages"][1]["content"], "仅回复 OK")
+
+    def test_transcript_truncation_keeps_chat_tail(self):
+        messages = summarizer.parse_chat(
+            "\n".join(
+                f"2026-06-01 09:{index:02d}:00 用户{index}: 第{index}条消息"
+                for index in range(20)
+            )
+        )
+
+        transcript, omitted_count = summarizer.format_transcript(messages, max_chars=260)
+
+        self.assertGreater(omitted_count, 0)
+        self.assertIn("中间省略", transcript)
+        self.assertIn("用户0: 第0条消息", transcript)
+        self.assertIn("用户19: 第19条消息", transcript)
 
 
 if __name__ == "__main__":

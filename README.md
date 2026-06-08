@@ -74,29 +74,13 @@ python wxchat_desktop.py
 
 API Key 使用 Windows DPAPI 按当前用户加密后保存，配置文件和便携包中都不会出现明文密钥。聊天文件路径、微信会话选择和生成结果不会保存。
 
-### 浏览器回退入口
+### 入口维护范围
 
-旧版本地 Web UI 暂时保留为回退入口。如果需要使用浏览器版，可从终端启动：
-
-```powershell
-python wxchat_webapp.py --port 8765
-```
-
-然后访问：
-
-```text
-http://127.0.0.1:8765/
-```
-
-也可以禁止自动打开浏览器：
-
-```powershell
-python wxchat_webapp.py --port 8774 --no-browser
-```
+当前版本只维护桌面 exe 和 `wxchat_desktop.py` 源码入口。旧浏览器 Web UI 已删除，不再提供 `wxchat_webapp.py`、`wxchat_app/webapp.py` 或 `web/` 静态资源。
 
 桌面版默认选择 DeepSeek。填入 API Key 后会自动安全保存，当前固定使用 `deepseek-v4-pro`，默认开启思考模式，思考深度为“中”。选择 DeepSeek 后，筛选后的聊天内容会发送到 DeepSeek API。
 
-为了提高 DeepSeek 上下文缓存命中率，程序发送给 DeepSeek 的输入会把稳定的聊天原文放在最前面，并且不会把“生成时间”这类每次变化的字段发送给模型。
+为了提高 DeepSeek 上下文缓存命中率，程序发送给 DeepSeek 的输入会保持稳定提示结构，并且不会把“生成时间”这类每次变化的字段发送给模型。长聊天超过发送上限时会保留聊天开头和结尾，避免只发送前半段而漏掉后续结论。
 
 ### 直接读取微信会话
 
@@ -207,7 +191,7 @@ python wxchat_summarizer.py INPUT [-o OUTPUT] [--top-messages N] [--encoding aut
 
 ```powershell
 python -m unittest discover -s tests
-python -m py_compile wxchat_summarizer.py wxchat_webapp.py wechat_cli_bridge.py wxchat_desktop.py wxchat_app\__init__.py wxchat_app\version.py wxchat_app\summarizer.py wxchat_app\wechat_cli_bridge.py wxchat_app\webapp.py wxchat_app\service.py wxchat_app\cli.py wxchat_app\desktop.py
+python -m py_compile wxchat_summarizer.py wechat_cli_bridge.py wxchat_desktop.py wxchat_app\__init__.py wxchat_app\version.py wxchat_app\summarizer.py wxchat_app\wechat_cli_bridge.py wxchat_app\service.py wxchat_app\cli.py wxchat_app\desktop.py
 ```
 
 ## 封装

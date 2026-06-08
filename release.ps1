@@ -36,7 +36,6 @@ if ($LASTEXITCODE -ne 0) { throw "Unit tests failed." }
 $compileFiles = @(
   "wxchat_desktop.py",
   "wxchat_summarizer.py",
-  "wxchat_webapp.py",
   "wechat_cli_bridge.py",
   "wxchat_app\__init__.py",
   "wxchat_app\version.py",
@@ -44,7 +43,6 @@ $compileFiles = @(
   "wxchat_app\desktop.py",
   "wxchat_app\service.py",
   "wxchat_app\summarizer.py",
-  "wxchat_app\webapp.py",
   "wxchat_app\wechat_cli_bridge.py",
   "wxchat_app\cli.py"
 )

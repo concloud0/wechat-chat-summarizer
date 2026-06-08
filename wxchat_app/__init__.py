@@ -6,5 +6,4 @@ __all__ = [
     "summarizer",
     "version",
     "wechat_cli_bridge",
-    "webapp",
 ]

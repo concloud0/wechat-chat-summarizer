@@ -19,23 +19,25 @@ from pathlib import Path
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 DEEPSEEK_CHAT_PATH = "/chat/completions"
+SPEAKER_MAX_CHARS = 120
 TIME_RE = r"\d{4}(?:[-/]\d{1,2}[-/]\d{1,2}|年\d{1,2}月\d{1,2}日)[ T]?\d{1,2}:\d{2}(?::\d{2})?"
 MESSAGE_PATTERNS = [
     re.compile(
         rf"^\[?(?P<time>{TIME_RE})\]?\s*(?:\t|\s+)"
-        r"(?P<speaker>[^:：\t|]{1,40})[:：]\s*(?P<content>.*)$"
+        rf"(?P<speaker>[^:：\t|]{{1,{SPEAKER_MAX_CHARS}}})[:：]\s*(?P<content>.*)$"
     ),
     re.compile(
         rf"^\[?(?P<time>{TIME_RE})\]?\s*(?:\t|\s+)\|?\s*"
-        r"(?P<speaker>[^|\t]{1,40})\s*(?:\||\t)\s*(?P<content>.+)$"
+        rf"(?P<speaker>[^|\t]{{1,{SPEAKER_MAX_CHARS}}})\s*(?:\||\t)\s*(?P<content>.+)$"
     ),
     re.compile(
-        rf"^(?P<speaker>[^:：\t|]{{1,40}})\s+(?P<time>{TIME_RE})[:：]?\s*(?P<content>.*)$"
+        rf"^(?P<speaker>[^:：\t|]{{1,{SPEAKER_MAX_CHARS}}})\s+(?P<time>{TIME_RE})[:：]?\s*(?P<content>.*)$"
     ),
     re.compile(
-        rf"^\[?(?P<time>{TIME_RE})\]?\s+(?P<speaker>\S{{1,40}})\s+(?P<content>.+)$"
+        rf"^\[?(?P<time>{TIME_RE})\]?\s+(?P<speaker>\S{{1,{SPEAKER_MAX_CHARS}}})\s+(?P<content>.+)$"
     ),
 ]
+MESSAGE_START_RE = re.compile(rf"^\[?{TIME_RE}\]?")
 
 AUTO_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030", "utf-16", "utf-16-le")
 STOPWORDS = {
@@ -181,6 +183,10 @@ def parse_chat_with_stats(text: str) -> ParseResult:
                 messages.append(current)
             timestamp, speaker, content = parsed
             current = Message(timestamp=timestamp, speaker=speaker, content=content, line_no=line_no)
+        elif looks_like_message_start(line):
+            ignored_lines += 1
+            if len(ignored_line_samples) < 20:
+                ignored_line_samples.append((line_no, line.strip()[:240]))
         elif current is not None:
             current = dataclasses.replace(current, content=f"{current.content}\n{line.strip()}")
         else:
@@ -213,6 +219,10 @@ def parse_message_line(line: str) -> tuple[dt.datetime, str, str] | None:
         if speaker and content:
             return timestamp, speaker, content
     return None
+
+
+def looks_like_message_start(line: str) -> bool:
+    return bool(MESSAGE_START_RE.match(line.strip()))
 
 
 def clean_speaker(speaker: str) -> str:
@@ -506,25 +516,91 @@ def build_deepseek_report(
 
 
 def format_transcript(messages: list[Message], max_chars: int) -> tuple[str, int]:
+    all_lines = [format_transcript_line(msg) for msg in sorted(messages, key=lambda item: item.timestamp)]
     lines: list[str] = []
     used = 0
-    omitted_count = 0
-    for index, msg in enumerate(sorted(messages, key=lambda item: item.timestamp)):
-        content = msg.content.replace("\n", " / ")
-        line = f"[{msg.timestamp:%Y-%m-%d %H:%M}] {msg.speaker}: {content}"
+    for line in all_lines:
         next_used = used + len(line) + 1
         if next_used > max_chars:
-            omitted_count = len(messages) - index
             break
         lines.append(line)
         used = next_used
-    return "\n".join(lines), omitted_count
+
+    if len(lines) == len(all_lines):
+        return "\n".join(lines), 0
+
+    return format_transcript_head_tail(all_lines, max_chars)
+
+
+def format_transcript_line(msg: Message) -> str:
+    content = msg.content.replace("\n", " / ")
+    return f"[{msg.timestamp:%Y-%m-%d %H:%M}] {msg.speaker}: {content}"
+
+
+def format_transcript_head_tail(all_lines: list[str], max_chars: int) -> tuple[str, int]:
+    if not all_lines:
+        return "", 0
+
+    omitted_marker_template = "\n... 中间省略 {count} 条消息 ...\n"
+    marker_for_budget = omitted_marker_template.format(count=len(all_lines)).strip()
+    available = max_chars - len(marker_for_budget) - 2
+    if available <= 0:
+        return truncate_single_transcript_line(all_lines[-1], max_chars), len(all_lines) - 1
+
+    head_budget = max(0, available // 2)
+    tail_budget = max(0, available - head_budget)
+    head: list[str] = []
+    tail: list[str] = []
+    head_used = 0
+    tail_used = 0
+    head_index = 0
+    tail_index = len(all_lines)
+
+    while head_index < tail_index:
+        line = all_lines[head_index]
+        cost = len(line) + 1
+        if head and head_used + cost > head_budget:
+            break
+        if not head and cost > head_budget:
+            break
+        head.append(line)
+        head_used += cost
+        head_index += 1
+
+    while tail_index > head_index:
+        line = all_lines[tail_index - 1]
+        cost = len(line) + 1
+        if tail and tail_used + cost > tail_budget:
+            break
+        if not tail and cost > tail_budget:
+            break
+        tail.append(line)
+        tail_used += cost
+        tail_index -= 1
+
+    if not head and not tail:
+        return truncate_single_transcript_line(all_lines[-1], max_chars), len(all_lines) - 1
+
+    selected_tail = list(reversed(tail))
+    omitted_count = max(0, tail_index - head_index)
+    if omitted_count:
+        marker = omitted_marker_template.format(count=omitted_count).strip()
+        return "\n".join([*head, marker, *selected_tail]), omitted_count
+    return "\n".join([*head, *selected_tail]), 0
+
+
+def truncate_single_transcript_line(line: str, max_chars: int) -> str:
+    if len(line) <= max_chars:
+        return line
+    if max_chars <= 3:
+        return line[:max_chars]
+    return line[: max_chars - 3] + "..."
 
 
 def build_deepseek_prompt(model_context: str, transcript: str, omitted_count: int, analysis: Analysis) -> str:
     warning = ""
     if omitted_count:
-        warning = f"\n注意：由于输入长度限制，原始聊天记录末尾有 {omitted_count} 条消息未发送给模型。"
+        warning = f"\n注意：由于输入长度限制，原始聊天记录中间有 {omitted_count} 条消息未发送给模型，开头和结尾已保留。"
 
     category_counts = {
         name: len(items)
