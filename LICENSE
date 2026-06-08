@@ -1,16 +1,21 @@
-# 使用条款
+MIT License
 
-本软件为个人工具试用版，不是开源软件。
+Copyright (c) 2026 concloud0
 
-允许：
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-- 下载并在个人 Windows 电脑上试用本发布包。
-- 在保留原文件和风险说明的前提下，将官方发布 ZIP 分享给受信任的测试用户。
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-未经作者明确许可，不允许：
-
-- 出售、出租、再打包、捆绑分发或作为商业服务的一部分提供。
-- 修改后重新发布，或声称本软件为开源项目。
-- 删除、隐藏或改写隐私、风险、未签名和第三方组件说明。
-
-本软件按现状提供。AI 摘要可能遗漏、误解或错误归纳信息，重要结论必须回看原始聊天记录。使用 DeepSeek 模式前，请确认你有权将相关聊天内容发送到所配置的 API 服务。
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

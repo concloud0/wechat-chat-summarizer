@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>微信聊天摘要工具</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="control-panel">
+        <div class="brand">
+          <div class="brand-mark">W</div>
+          <div>
+            <h1>微信聊天摘要工具</h1>
+            <p>本地解析文本文件，生成可导出的摘要。</p>
+          </div>
+        </div>
+
+        <form id="summary-form" class="form-stack">
+          <label>
+            <span>记录来源</span>
+            <select id="source-select" name="source">
+              <option value="file">上传文本文件</option>
+              <option value="wechat">微信会话</option>
+            </select>
+          </label>
+
+          <section id="file-source">
+            <label class="file-drop" for="chat-file">
+              <span class="file-title">选择聊天记录</span>
+              <span id="file-name" class="file-name">支持 txt、csv、log 等文本文件</span>
+              <input id="chat-file" name="chat_file" type="file" accept=".txt,.csv,.log,.md,text/*" />
+            </label>
+          </section>
+
+          <section id="wechat-source" class="wechat-source" hidden>
+            <div class="toolbar-line">
+              <button id="wechat-status-button" type="button">检测</button>
+              <button id="wechat-sessions-button" type="button">刷新会话</button>
+            </div>
+            <p id="wechat-status" class="field-hint">需要先安装并初始化 wechat-cli。</p>
+            <label>
+              <span>选择群聊/会话</span>
+              <select id="wechat-session-select" name="wechat_chat">
+                <option value="">先刷新会话</option>
+              </select>
+            </label>
+            <div class="field-grid">
+              <label>
+                <span>导出条数</span>
+                <input name="wechat_limit" type="number" min="1" max="20000" value="300" />
+              </label>
+              <label>
+                <span>会话数量</span>
+                <input id="wechat-session-limit" type="number" min="1" max="500" value="50" />
+              </label>
+            </div>
+            <p class="field-hint">如果检测失败，请在终端运行 <code>wechat-cli init</code>，并保持微信电脑版已登录。</p>
+          </section>
+
+          <div class="field-grid">
+            <label>
+              <span>起始日期</span>
+              <input name="date_from" type="date" />
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input name="date_to" type="date" />
+            </label>
+          </div>
+
+          <label>
+            <span>成员筛选</span>
+            <input name="speakers" type="text" placeholder="张三, 李四" />
+          </label>
+
+          <label>
+            <span>摘要引擎</span>
+            <select name="engine" id="engine-select">
+              <option value="local">本地规则</option>
+              <option value="deepseek">DeepSeek API</option>
+            </select>
+          </label>
+
+          <div id="deepseek-fields" class="deepseek-fields" hidden>
+            <label>
+              <span>DeepSeek API Key</span>
+              <input name="deepseek_api_key" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <div class="field-grid">
+              <label>
+                <span>模型</span>
+                <input name="deepseek_model" type="text" value="deepseek-v4-pro" readonly />
+              </label>
+              <label>
+                <span>发送上限</span>
+                <input name="max_input_chars" type="number" min="1000" max="300000" value="60000" />
+              </label>
+            </div>
+            <div class="field-grid">
+              <label>
+                <span>思考模式</span>
+                <select name="deepseek_thinking">
+                  <option value="enabled" selected>开启</option>
+                  <option value="disabled">关闭</option>
+                </select>
+              </label>
+              <label>
+                <span>思考深度</span>
+                <select name="deepseek_reasoning_effort">
+                  <option value="low">低</option>
+                  <option value="medium" selected>中</option>
+                  <option value="high">高</option>
+                  <option value="max">最高</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>API Base URL</span>
+              <input name="deepseek_base_url" type="text" value="https://api.deepseek.com" />
+            </label>
+            <p class="field-hint">选择 DeepSeek 后，筛选后的聊天内容会发送到 DeepSeek API。DeepSeek 文档说明 medium 会兼容映射到 high。</p>
+          </div>
+
+          <div class="field-grid">
+            <label>
+              <span>编码</span>
+              <select name="encoding">
+                <option value="auto">自动识别</option>
+                <option value="utf-8">UTF-8</option>
+                <option value="gb18030">GB18030</option>
+                <option value="utf-16">UTF-16</option>
+              </select>
+            </label>
+            <label>
+              <span>输出格式</span>
+              <select name="format" id="format-select">
+                <option value="markdown">Markdown</option>
+                <option value="json">JSON</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>每类摘录数量</span>
+            <input name="top_messages" type="number" min="1" max="50" value="8" />
+          </label>
+
+          <button class="primary-button" type="submit">导出并生成摘要</button>
+        </form>
+
+        <div class="privacy-note">
+          <strong id="privacy-title">本地处理</strong>
+          <span id="privacy-text">文件只会发送到本机服务，不会上传到外网。</span>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">摘要预览</p>
+            <h2 id="preview-title">等待选择聊天记录</h2>
+          </div>
+          <div class="actions">
+            <button id="copy-button" type="button" disabled>复制</button>
+            <button id="download-button" type="button" disabled>导出</button>
+            <button id="shutdown-button" class="danger-button" type="button">关闭程序</button>
+          </div>
+        </header>
+
+        <section id="status-strip" class="status-strip">
+          <div>
+            <span id="message-count">0</span>
+            <small>消息</small>
+          </div>
+          <div>
+            <span id="speaker-count">0</span>
+            <small>成员</small>
+          </div>
+          <div>
+            <span id="encoding-used">-</span>
+            <small>编码</small>
+          </div>
+          <div>
+            <span id="ignored-lines">0</span>
+            <small>未识别行</small>
+          </div>
+        </section>
+
+        <div id="empty-state" class="empty-state">
+          <p>选择聊天记录后点击“生成摘要”。</p>
+          <span>你可以限制日期、成员，或切换 Markdown / JSON 输出。</span>
+        </div>
+
+        <article id="preview" class="preview" hidden></article>
+        <textarea id="raw-output" class="raw-output" spellcheck="false" hidden></textarea>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

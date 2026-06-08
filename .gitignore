@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+
+.venv-build/
+.playwright-mcp/
+.agents/
+.codex/
+
+build/
+dist/
+release/
+WeChatChatSummarizer.spec
+
+server.out.log
+server.err.log
+summary.md
+summary.json
+
+# Local continuity, smoke-test, and design artifacts that should not be
+# uploaded to a public release repository.
+NEXT_CHAT_HANDOFF.md
+demo_*.txt
+demo_*.md
+ui-style-directions.png

@@ -1,0 +1,17 @@
+微信聊天摘要工具 0.9.0 快速开始
+
+请下载 WeChatChatSummarizer-0.9.0-win64.zip。
+GitHub 自动生成的 Source code 压缩包是源码包，不包含已打包好的 EXE。
+
+1. 双击 WeChatChatSummarizer.exe。
+2. 首次运行时，Windows 可能显示“未知发布者”提示。本试用版未进行代码签名，请先核对 SHA256SUMS.txt。
+3. 选择“文本文件”，打开聊天记录。
+4. 默认摘要引擎为 DeepSeek。填写 API Key 后可点击“测试连接”。
+5. 不希望上传聊天内容时，将摘要引擎改为 local。
+6. 点击“生成摘要”，完成后可复制或导出。
+
+微信会话直读是可选功能，需要额外安装 Python 和 wechat-cli，并执行初始化。
+详细说明请阅读 README.md。
+
+清除本地设置：
+删除 %LOCALAPPDATA%\WeChatChatSummarizer 文件夹。
