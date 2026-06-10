@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 import tkinter as tk
+import uuid
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
@@ -158,6 +159,10 @@ class LinearSelect(tk.Frame):
         self.values = list(values)
         self.command = command
         self._state = "normal"
+        self._popup: tk.Toplevel | None = None
+        self._popup_owner: tk.Misc | None = None
+        self._popup_owner_bindings: list[tuple[str, str]] = []
+        self._popup_owner_geometry: tuple[int, int, int, int] | None = None
         self.display_var = tk.StringVar(value=variable.get())
         self.label = tk.Label(self, textvariable=self.display_var, anchor="w", bg="#ffffff", fg=TEXT, font=UI_FONT, width=width or 0)
         self.label.grid(row=0, column=0, sticky="ew", padx=(8, 4), pady=6)
@@ -189,6 +194,8 @@ class LinearSelect(tk.Frame):
         if "state" in options:
             self._state = str(options.pop("state"))
             muted = self._state == "disabled"
+            if muted:
+                self.close_popup()
             self.label.configure(fg=SUBTLE if muted else TEXT)
             self.caret.configure(fg=SUBTLE if muted else MUTED)
             self.configure_cursor("arrow" if muted else "hand2")
@@ -205,14 +212,9 @@ class LinearSelect(tk.Frame):
     def open_menu(self, _event: tk.Event | None = None) -> None:
         if self._state == "disabled" or not self.values:
             return
-        popup = tk.Toplevel(self)
-        popup.overrideredirect(True)
-        popup.configure(bg=LINE)
-        x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height() + 3
         width = max(self.winfo_width(), 160)
         height = min(max(len(self.values), 1) * 28 + 2, 220)
-        popup.geometry(f"{width}x{height}+{x}+{y}")
+        popup = self.create_popup(width, height)
         listbox = tk.Listbox(
             popup,
             bd=0,
@@ -239,16 +241,110 @@ class LinearSelect(tk.Frame):
             selection = listbox.curselection()
             if selection:
                 self.select_value(self.values[selection[0]])
-            popup.destroy()
+            self.close_popup()
 
         def dismiss(_event: tk.Event | None = None) -> None:
-            popup.destroy()
+            self.close_popup()
 
         listbox.bind("<ButtonRelease-1>", choose)
         listbox.bind("<Return>", choose)
         popup.bind("<Escape>", dismiss)
         popup.focus_force()
         listbox.focus_set()
+
+    def create_popup(self, width: int, height: int) -> tk.Toplevel:
+        self.close_popup()
+        owner = self.winfo_toplevel()
+        popup = tk.Toplevel(owner)
+        popup.withdraw()
+        popup.overrideredirect(True)
+        popup.transient(owner)
+        popup.configure(bg=LINE)
+
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height() + 3
+        screen_width = popup.winfo_screenwidth()
+        screen_height = popup.winfo_screenheight()
+        x = max(0, min(x, screen_width - width))
+        if y + height > screen_height:
+            y = max(0, self.winfo_rooty() - height - 3)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+        self._popup = popup
+        self._popup_owner = owner
+        owner.update_idletasks()
+        self._popup_owner_geometry = self.owner_geometry(owner)
+        for sequence, callback in (
+            ("<Unmap>", self._close_popup_from_owner),
+            ("<Configure>", self._close_popup_if_owner_moved),
+        ):
+            binding_id = owner.bind(sequence, callback, add="+")
+            if binding_id:
+                self._popup_owner_bindings.append((sequence, binding_id))
+        popup.bind("<Destroy>", self._on_popup_destroy, add="+")
+        popup.deiconify()
+        popup.lift(owner)
+        popup.after_idle(lambda active=popup: self._bind_owner_click(active))
+        return popup
+
+    def _bind_owner_click(self, popup: tk.Toplevel) -> None:
+        if self._popup is not popup or self._popup_owner is None:
+            return
+        binding_id = self._popup_owner.bind("<ButtonPress-1>", self._close_popup_from_owner, add="+")
+        if binding_id:
+            self._popup_owner_bindings.append(("<ButtonPress-1>", binding_id))
+
+    def _close_popup_from_owner(self, _event: tk.Event | None = None) -> None:
+        self.close_popup()
+
+    def _close_popup_if_owner_moved(self, _event: tk.Event | None = None) -> None:
+        owner = self._popup_owner
+        if owner is None:
+            self.close_popup()
+            return
+        try:
+            geometry = self.owner_geometry(owner)
+        except tk.TclError:
+            self.close_popup()
+            return
+        if geometry != self._popup_owner_geometry:
+            self.close_popup()
+
+    @staticmethod
+    def owner_geometry(owner: tk.Misc) -> tuple[int, int, int, int]:
+        return (
+            owner.winfo_rootx(),
+            owner.winfo_rooty(),
+            owner.winfo_width(),
+            owner.winfo_height(),
+        )
+
+    def _on_popup_destroy(self, event: tk.Event) -> None:
+        if event.widget is self._popup:
+            self._clear_popup_state()
+
+    def _clear_popup_state(self) -> None:
+        owner = self._popup_owner
+        if owner is not None:
+            for sequence, binding_id in self._popup_owner_bindings:
+                try:
+                    owner.unbind(sequence, binding_id)
+                except tk.TclError:
+                    pass
+        self._popup_owner_bindings.clear()
+        self._popup_owner_geometry = None
+        self._popup_owner = None
+        self._popup = None
+
+    def close_popup(self) -> None:
+        popup = self._popup
+        if popup is None:
+            return
+        self._clear_popup_state()
+        try:
+            popup.destroy()
+        except tk.TclError:
+            pass
 
     def select_value(self, value: str) -> None:
         if value not in self.values:
@@ -295,13 +391,8 @@ class SearchableSelect(LinearSelect):
     def open_menu(self, _event: tk.Event | None = None) -> None:
         if self._state == "disabled" or not self.values:
             return
-        popup = tk.Toplevel(self)
-        popup.overrideredirect(True)
-        popup.configure(bg=LINE)
-        x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height() + 3
         width = max(self.winfo_width(), 240)
-        popup.geometry(f"{width}x260+{x}+{y}")
+        popup = self.create_popup(width, 260)
 
         body = tk.Frame(popup, bg="#ffffff")
         body.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
@@ -357,11 +448,11 @@ class SearchableSelect(LinearSelect):
                 selection = listbox.curselection()
                 index = selection[0] if selection else 0
                 self.select_value(visible_values[index])
-                popup.destroy()
+                self.close_popup()
             return "break"
 
         def dismiss(_event: tk.Event | None = None) -> str:
-            popup.destroy()
+            self.close_popup()
             return "break"
 
         query_var.trace_add("write", refresh)
@@ -572,7 +663,8 @@ class DesktopApp(ttk.Frame):
         self.latest_response: service.SummaryResponse | None = None
         self.wechat_sessions: list[wechat_cli_bridge.WechatSession] = []
         self.busy_widgets: list[tk.Widget] = []
-        self._busy_previous_states: dict[tk.Widget, str] = {}
+        self._busy_dialog: tk.Toplevel | None = None
+        self._busy_progress: ttk.Progressbar | None = None
         self._syncing_dates = False
         self._settings_ready = False
         self._settings_after_id: str | None = None
@@ -580,6 +672,7 @@ class DesktopApp(ttk.Frame):
         self._closing = False
         self._source_buttons: list[tk.Radiobutton] = []
         self._api_key_visible = False
+        self._openai_api_key_visible = False
         self._markdown_preview_mode = saved.preview_mode
 
         self.source_var = tk.StringVar(value=saved.source)
@@ -595,6 +688,9 @@ class DesktopApp(ttk.Frame):
         self.deepseek_base_url_var = tk.StringVar(value=saved.deepseek_base_url)
         self.deepseek_thinking_var = tk.BooleanVar(value=saved.deepseek_thinking)
         self.deepseek_effort_var = tk.StringVar(value=saved.deepseek_effort)
+        self.openai_key_var = tk.StringVar(value=saved.openai_api_key)
+        self.openai_base_url_var = tk.StringVar(value=saved.openai_base_url)
+        self.openai_effort_var = tk.StringVar(value=saved.openai_effort)
         self.max_input_chars_var = tk.StringVar(value=saved.max_input_chars)
         self.wechat_limit_var = tk.StringVar(value=saved.wechat_limit)
         self.wechat_session_limit_var = tk.StringVar(value=saved.wechat_session_limit)
@@ -657,6 +753,30 @@ class DesktopApp(ttk.Frame):
         self.style.configure("Subtle.TButton", padding=(self.px(10), self.px(5)), background="#ffffff", foreground=TEXT, bordercolor=LINE)
         self.style.configure("Primary.TButton", padding=(self.px(14), self.px(9)), background=ACCENT, foreground="#ffffff", bordercolor=ACCENT, font=(FONT_FAMILY, 10, "bold"))
         self.style.map("Primary.TButton", background=[("active", ACCENT_DARK), ("disabled", "#b8bde8")], foreground=[("disabled", "#f3f4ff")])
+        self.style.configure(
+            "Busy.Horizontal.TProgressbar",
+            background=ACCENT,
+            troughcolor=ACCENT_SOFT,
+            bordercolor=ACCENT_SOFT,
+            lightcolor=ACCENT,
+            darkcolor=ACCENT,
+            thickness=self.px(7),
+        )
+        self.style.configure(
+            "Preview.Vertical.TScrollbar",
+            background=ACCENT,
+            troughcolor="#f2f3f8",
+            bordercolor="#f2f3f8",
+            lightcolor=ACCENT,
+            darkcolor=ACCENT,
+            arrowcolor=MUTED,
+            gripcount=0,
+            width=self.px(9),
+        )
+        self.style.map(
+            "Preview.Vertical.TScrollbar",
+            background=[("active", ACCENT_DARK), ("pressed", ACCENT_DARK)],
+        )
         self.style.configure("Date.TButton", padding=(self.px(5), self.px(5)), background="#ffffff", foreground=TEXT, bordercolor=LINE)
         self.style.configure("DateSelected.TButton", padding=(self.px(5), self.px(5)), background=ACCENT, foreground="#ffffff", bordercolor=ACCENT)
         self.style.map("DateSelected.TButton", background=[("active", ACCENT_DARK)])
@@ -801,7 +921,7 @@ class DesktopApp(ttk.Frame):
 
     def build_controls_panel(self, parent: tk.Frame) -> None:
         ttk.Label(parent, text="摘要设置", style="Sidebar.TLabel", font=(FONT_FAMILY, 13, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(parent, text="筛选范围与 DeepSeek 参数。", style="Sidebar.TLabel", foreground=MUTED).grid(
+        ttk.Label(parent, text="筛选范围与 AI 引擎参数。", style="Sidebar.TLabel", foreground=MUTED).grid(
             row=1,
             column=0,
             sticky="w",
@@ -824,15 +944,31 @@ class DesktopApp(ttk.Frame):
 
         engine_section = self.add_section(parent, "摘要引擎", 3)
         engine_section.columnconfigure(0, weight=1)
-        self.add_labeled_combo(engine_section, "引擎", self.engine_var, ("local", "deepseek"), 1, 0, command=lambda _: self.update_engine_mode())
-        self.add_labeled_combo(engine_section, "输出格式", self.format_var, ("markdown", "json"), 2, 0)
+        self.add_labeled_combo(
+            engine_section,
+            "引擎",
+            self.engine_var,
+            ("local", "deepseek", "openai"),
+            1,
+            0,
+            command=lambda _: self.update_engine_mode(),
+        )
+        self.add_labeled_combo(
+            engine_section,
+            "输出格式",
+            self.format_var,
+            ("markdown", "txt", "json"),
+            2,
+            0,
+            command=lambda _: self.on_output_format_changed(),
+        )
         self.deepseek_frame = ttk.Frame(engine_section, style="Surface.TFrame")
         self.deepseek_frame.grid(row=3, column=0, sticky="ew", pady=(self.px(8), 0))
         self.deepseek_frame.columnconfigure(0, weight=1)
         key_row = ttk.Frame(self.deepseek_frame, style="Sidebar.TFrame")
         key_row.grid(row=0, column=0, sticky="ew", pady=(self.px(5), 0))
         key_row.columnconfigure(1, weight=1)
-        ttk.Label(key_row, text="API Key", style="FieldLabel.TLabel", width=9).grid(
+        ttk.Label(key_row, text="DeepSeek Key", style="FieldLabel.TLabel", width=9).grid(
             row=0,
             column=0,
             sticky="w",
@@ -848,7 +984,14 @@ class DesktopApp(ttk.Frame):
             sticky="ew",
             pady=(self.px(10), self.px(3)),
         )
-        self.add_labeled_combo(self.deepseek_frame, "思考深度", self.deepseek_effort_var, ("low", "medium", "high", "max"), 2, 0)
+        self.add_labeled_combo(
+            self.deepseek_frame,
+            "思考深度",
+            self.deepseek_effort_var,
+            ("high", "max"),
+            2,
+            0,
+        )
         deepseek_actions = ttk.Frame(self.deepseek_frame, style="Sidebar.TFrame")
         deepseek_actions.grid(row=3, column=0, sticky="ew", pady=(self.px(9), 0))
         deepseek_actions.columnconfigure(0, weight=1)
@@ -861,7 +1004,68 @@ class DesktopApp(ttk.Frame):
         self.advanced_frame.grid(row=4, column=0, sticky="ew")
         self.advanced_frame.columnconfigure(0, weight=1)
         self.add_labeled_entry(self.advanced_frame, "API Base URL", self.deepseek_base_url_var, 0, 0)
-        self.add_labeled_entry(self.advanced_frame, "发送上限", self.max_input_chars_var, 1, 0)
+        self.add_labeled_entry(self.advanced_frame, "单次正文上限", self.max_input_chars_var, 1, 0)
+
+        self.openai_frame = ttk.Frame(engine_section, style="Surface.TFrame")
+        self.openai_frame.grid(row=4, column=0, sticky="ew", pady=(self.px(8), 0))
+        self.openai_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            self.openai_frame,
+            text="GPT-5.5 / OpenAI Responses API",
+            style="FieldLabel.TLabel",
+        ).grid(row=0, column=0, sticky="w", pady=(self.px(2), self.px(5)))
+        openai_key_row = ttk.Frame(self.openai_frame, style="Sidebar.TFrame")
+        openai_key_row.grid(row=1, column=0, sticky="ew")
+        openai_key_row.columnconfigure(1, weight=1)
+        ttk.Label(openai_key_row, text="OpenAI Key", style="FieldLabel.TLabel", width=9).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, self.px(8)),
+        )
+        self.openai_key_field = self.track(LinearField(openai_key_row, self.openai_key_var, show="*"))
+        self.openai_key_field.grid(row=0, column=1, sticky="ew")
+        self.openai_key_visibility_button = self.track(
+            LinearButton(openai_key_row, "显示", self.toggle_openai_api_key_visibility, width=4)
+        )
+        self.openai_key_visibility_button.grid(row=0, column=2, padx=(self.px(6), 0))
+        self.add_labeled_combo(
+            self.openai_frame,
+            "推理深度",
+            self.openai_effort_var,
+            ("low", "medium", "high", "xhigh"),
+            2,
+            0,
+        )
+        openai_actions = ttk.Frame(self.openai_frame, style="Sidebar.TFrame")
+        openai_actions.grid(row=3, column=0, sticky="ew", pady=(self.px(9), 0))
+        openai_actions.columnconfigure(0, weight=1)
+        openai_actions.columnconfigure(1, weight=1)
+        self.openai_connection_test_button = self.track(
+            LinearButton(openai_actions, "测试 OpenAI", self.test_openai_connection)
+        )
+        self.openai_connection_test_button.grid(row=0, column=0, sticky="ew")
+        self.openai_advanced_button = self.track(
+            LinearButton(openai_actions, "高级设置  >", self.toggle_advanced)
+        )
+        self.openai_advanced_button.grid(row=0, column=1, sticky="ew", padx=(self.px(6), 0))
+        self.openai_advanced_frame = ttk.Frame(self.openai_frame, style="Surface.TFrame")
+        self.openai_advanced_frame.grid(row=4, column=0, sticky="ew")
+        self.openai_advanced_frame.columnconfigure(0, weight=1)
+        self.add_labeled_entry(
+            self.openai_advanced_frame,
+            "OpenAI Base URL",
+            self.openai_base_url_var,
+            0,
+            0,
+        )
+        self.add_labeled_entry(
+            self.openai_advanced_frame,
+            "单次正文上限",
+            self.max_input_chars_var,
+            1,
+            0,
+        )
 
         footer = ttk.Frame(parent, style="Sidebar.TFrame")
         footer.grid(row=5, column=0, sticky="sew", pady=(self.px(12), 0))
@@ -885,6 +1089,8 @@ class DesktopApp(ttk.Frame):
         self.copy_button.grid(row=0, column=1, rowspan=2, padx=(self.px(8), 0))
         self.export_button = LinearButton(header, "导出", self.export_report)
         self.export_button.grid(row=0, column=2, rowspan=2, padx=(self.px(8), 0))
+        self.export_all_button = LinearButton(header, "全部导出", self.export_all_reports)
+        self.export_all_button.grid(row=0, column=3, rowspan=2, padx=(self.px(8), 0))
 
         meta = ttk.Frame(parent, style="Panel.TFrame")
         meta.grid(row=1, column=0, sticky="ew", pady=(0, self.px(12)))
@@ -945,6 +1151,11 @@ class DesktopApp(ttk.Frame):
         preview_shell.columnconfigure(0, weight=1)
         preview_shell.rowconfigure(0, weight=1)
 
+        self.preview_scrollbar = ttk.Scrollbar(
+            preview_shell,
+            orient="vertical",
+            style="Preview.Vertical.TScrollbar",
+        )
         self.output_text = tk.Text(
             preview_shell,
             wrap="word",
@@ -960,8 +1171,17 @@ class DesktopApp(ttk.Frame):
             font=(FONT_FAMILY, 10),
             spacing1=self.px(2),
             spacing3=self.px(4),
+            yscrollcommand=self.preview_scrollbar.set,
         )
+        self.preview_scrollbar.configure(command=self.output_text.yview)
         self.output_text.grid(row=0, column=0, sticky="nsew")
+        self.preview_scrollbar.grid(
+            row=0,
+            column=1,
+            sticky="ns",
+            padx=(0, self.px(2)),
+            pady=self.px(3),
+        )
         self.configure_preview_tags()
         preview_shell.bind("<Configure>", self.update_preview_padding)
         self.output_text.insert("1.0", "选择聊天记录后点击“生成摘要”。\n\n可以限制日期、成员，或切换本地规则 / DeepSeek API。")
@@ -1130,8 +1350,8 @@ class DesktopApp(ttk.Frame):
     def render_preview(self) -> None:
         if not self.latest_response:
             return
-        report = self.latest_response.report
-        is_markdown = self.latest_response.download_name.lower().endswith(".md")
+        report = self.current_report_text()
+        is_markdown = self.active_output_format() == "markdown"
         reading = self.preview_mode_var.get() == "reading" and is_markdown
         self.output_text.configure(state="normal", fg=TEXT)
         self.output_text.delete("1.0", tk.END)
@@ -1142,7 +1362,7 @@ class DesktopApp(ttk.Frame):
         self.output_text.configure(state="disabled")
 
     def update_preview_mode(self) -> None:
-        if self.latest_response and not self.latest_response.download_name.lower().endswith(".md"):
+        if self.latest_response and self.active_output_format() != "markdown":
             self.preview_mode_var.set("source")
             self.reading_button.configure(state="disabled")
         else:
@@ -1210,6 +1430,13 @@ class DesktopApp(ttk.Frame):
         self.deepseek_key_field.set_masked(not self._api_key_visible)
         self.key_visibility_button.configure(text="隐藏" if self._api_key_visible else "显示")
 
+    def toggle_openai_api_key_visibility(self) -> None:
+        self._openai_api_key_visible = not self._openai_api_key_visible
+        self.openai_key_field.set_masked(not self._openai_api_key_visible)
+        self.openai_key_visibility_button.configure(
+            text="隐藏" if self._openai_api_key_visible else "显示"
+        )
+
     def test_deepseek_connection(self) -> None:
         api_key = self.deepseek_key_var.get().strip()
         base_url = self.deepseek_base_url_var.get().strip() or summarizer.DEFAULT_DEEPSEEK_BASE_URL
@@ -1222,6 +1449,19 @@ class DesktopApp(ttk.Frame):
     def apply_connection_test(self, result: object) -> None:
         if isinstance(result, str) and result.strip():
             self.status_var.set("DeepSeek 连接成功。")
+
+    def test_openai_connection(self) -> None:
+        api_key = self.openai_key_var.get().strip()
+        base_url = self.openai_base_url_var.get().strip() or summarizer.DEFAULT_OPENAI_BASE_URL
+
+        def worker() -> str:
+            return summarizer.test_openai_connection(api_key, base_url, timeout=15)
+
+        self.run_background("正在测试 OpenAI 连接...", worker, self.apply_openai_connection_test)
+
+    def apply_openai_connection_test(self, result: object) -> None:
+        if isinstance(result, str) and result.strip():
+            self.status_var.set("OpenAI 连接成功。")
 
     def add_labeled_entry(
         self,
@@ -1311,11 +1551,15 @@ class DesktopApp(ttk.Frame):
         self.reset_generate_label()
 
     def update_engine_mode(self) -> None:
-        if self.engine_var.get() == "deepseek":
+        engine = self.engine_var.get()
+        if engine == "deepseek":
             self.deepseek_frame.grid()
-            self.format_var.set("markdown")
         else:
             self.deepseek_frame.grid_remove()
+        if engine == "openai":
+            self.openai_frame.grid()
+        else:
+            self.openai_frame.grid_remove()
 
     def toggle_advanced(self) -> None:
         self.advanced_expanded_var.set(not self.advanced_expanded_var.get())
@@ -1325,9 +1569,13 @@ class DesktopApp(ttk.Frame):
         if self.advanced_expanded_var.get():
             self.advanced_frame.grid()
             self.advanced_button.configure(text="高级设置  v")
+            self.openai_advanced_frame.grid()
+            self.openai_advanced_button.configure(text="高级设置  v")
         else:
             self.advanced_frame.grid_remove()
             self.advanced_button.configure(text="高级设置  >")
+            self.openai_advanced_frame.grid_remove()
+            self.openai_advanced_button.configure(text="高级设置  >")
 
     def bind_settings_traces(self) -> None:
         variables: tuple[tk.Variable, ...] = (
@@ -1343,6 +1591,9 @@ class DesktopApp(ttk.Frame):
             self.deepseek_base_url_var,
             self.deepseek_thinking_var,
             self.deepseek_effort_var,
+            self.openai_key_var,
+            self.openai_base_url_var,
+            self.openai_effort_var,
             self.max_input_chars_var,
             self.wechat_limit_var,
             self.wechat_session_limit_var,
@@ -1366,6 +1617,9 @@ class DesktopApp(ttk.Frame):
             deepseek_base_url=self.deepseek_base_url_var.get(),
             deepseek_thinking=self.deepseek_thinking_var.get(),
             deepseek_effort=self.deepseek_effort_var.get(),
+            openai_api_key=self.openai_key_var.get(),
+            openai_base_url=self.openai_base_url_var.get(),
+            openai_effort=self.openai_effort_var.get(),
             max_input_chars=self.max_input_chars_var.get(),
             wechat_limit=self.wechat_limit_var.get(),
             wechat_session_limit=self.wechat_session_limit_var.get(),
@@ -1461,7 +1715,11 @@ class DesktopApp(ttk.Frame):
             deepseek_base_url=self.deepseek_base_url_var.get().strip() or summarizer.DEFAULT_DEEPSEEK_BASE_URL,
             deepseek_thinking=self.deepseek_thinking_var.get(),
             deepseek_reasoning_effort=self.deepseek_effort_var.get(),
-            max_input_chars=self.parse_int(self.max_input_chars_var.get(), "发送上限"),
+            openai_api_key=self.openai_key_var.get().strip() or None,
+            openai_base_url=self.openai_base_url_var.get().strip()
+            or summarizer.DEFAULT_OPENAI_BASE_URL,
+            openai_reasoning_effort=self.openai_effort_var.get(),
+            max_input_chars=self.parse_int(self.max_input_chars_var.get(), "单次正文上限"),
         )
 
     def validate_date_order(self) -> None:
@@ -1539,7 +1797,7 @@ class DesktopApp(ttk.Frame):
                 "个人工具试用版，仅支持 64 位 Windows 10/11。\n"
                 "本版本未进行 Authenticode 代码签名。\n\n"
                 f"设置目录：\n{self.settings_store.path.parent}\n\n"
-                "DeepSeek 模式会将筛选后的聊天内容发送到配置的 API；\n"
+                "DeepSeek / GPT-5.5 模式会将筛选后的聊天内容发送到各自配置的 API；\n"
                 "local 模式只在本机处理。"
             ),
         )
@@ -1607,27 +1865,83 @@ class DesktopApp(ttk.Frame):
 
     def set_busy_state(self, busy: bool) -> None:
         if busy:
-            widgets = self.stateful_widgets()
-            previous_states: dict[tk.Widget, str] = {}
-            for widget in widgets:
-                try:
-                    previous_states[widget] = str(widget.cget("state"))
-                except tk.TclError:
-                    continue
-            self._busy_previous_states = previous_states
-            for widget in widgets:
-                try:
-                    widget.configure(state="disabled")
-                except tk.TclError:
-                    continue
+            if self._busy_dialog is not None:
+                return
+            self.show_busy_dialog()
             return
-        for widget, state in self._busy_previous_states.items():
-            try:
-                widget.configure(state=state)
-            except tk.TclError:
-                continue
-        self._busy_previous_states.clear()
+        self.hide_busy_dialog()
         self.set_result_actions_enabled(self.latest_response is not None)
+
+    def show_busy_dialog(self) -> None:
+        status = self.status_var.get()
+        title = "正在处理"
+        if "生成摘要" in status:
+            title = "正在生成摘要"
+        elif "会话" in status:
+            title = "正在读取微信会话"
+        elif "连接" in status:
+            title = "正在测试连接"
+
+        dialog = tk.Toplevel(self.master)
+        dialog.title(title)
+        dialog.configure(bg=PANEL)
+        dialog.resizable(False, False)
+        dialog.transient(self.master)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        content = tk.Frame(dialog, bg=PANEL, padx=self.px(28), pady=self.px(24))
+        content.grid(row=0, column=0, sticky="nsew")
+        tk.Label(
+            content,
+            text=title,
+            bg=PANEL,
+            fg=TEXT,
+            font=(FONT_FAMILY, 13, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            content,
+            text=status,
+            bg=PANEL,
+            fg=MUTED,
+            font=UI_FONT,
+            justify="left",
+            wraplength=self.px(360),
+        ).grid(row=1, column=0, sticky="w", pady=(self.px(7), self.px(18)))
+        progress = ttk.Progressbar(
+            content,
+            mode="indeterminate",
+            length=self.px(360),
+            style="Busy.Horizontal.TProgressbar",
+        )
+        progress.grid(row=2, column=0, sticky="ew")
+
+        dialog.update_idletasks()
+        x = self.master.winfo_rootx() + max(0, (self.master.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.master.winfo_rooty() + max(0, (self.master.winfo_height() - dialog.winfo_height()) // 2)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
+        dialog.focus_force()
+        progress.start(12)
+        self._busy_dialog = dialog
+        self._busy_progress = progress
+
+    def hide_busy_dialog(self) -> None:
+        progress = self._busy_progress
+        dialog = self._busy_dialog
+        self._busy_progress = None
+        self._busy_dialog = None
+        if progress is not None:
+            try:
+                progress.stop()
+            except tk.TclError:
+                pass
+        if dialog is not None:
+            try:
+                if dialog.grab_current() is dialog:
+                    dialog.grab_release()
+                dialog.destroy()
+            except tk.TclError:
+                pass
 
     def stateful_widgets(self) -> list[tk.Widget]:
         widgets: list[tk.Widget] = []
@@ -1654,9 +1968,60 @@ class DesktopApp(ttk.Frame):
         state = "normal" if enabled else "disabled"
         self.copy_button.configure(state=state)
         self.export_button.configure(state=state)
+        all_state = "normal" if enabled and self.has_all_formats() else "disabled"
+        self.export_all_button.configure(state=all_state)
 
     def current_report_text(self) -> str:
-        return self.latest_response.report if self.latest_response else ""
+        if not self.latest_response:
+            return ""
+        reports = self.latest_response.rendered_reports
+        return reports.get(self.active_output_format(), self.latest_response.report)
+
+    def active_output_format(self) -> str:
+        if self.latest_response and self.latest_response.rendered_reports:
+            selected = self.format_var.get()
+            return selected if selected in self.latest_response.rendered_reports else "markdown"
+        if self.latest_response:
+            suffix = Path(self.latest_response.download_name).suffix.lower()
+            return {".md": "markdown", ".txt": "txt", ".json": "json"}.get(suffix, "markdown")
+        return self.format_var.get()
+
+    def current_download_name(self) -> str:
+        if not self.latest_response:
+            return ""
+        if not self.latest_response.rendered_reports:
+            return self.latest_response.download_name
+        extension = service.output_extension(self.active_output_format())
+        return f"{Path(self.latest_response.download_name).stem}.{extension}"
+
+    def has_all_formats(self) -> bool:
+        if not self.latest_response:
+            return False
+        return {"markdown", "txt", "json"}.issubset(self.latest_response.rendered_reports)
+
+    def on_output_format_changed(self) -> None:
+        if not self.latest_response or not self.latest_response.rendered_reports:
+            return
+        if self.active_output_format() == "markdown":
+            self.preview_mode_var.set(self._markdown_preview_mode)
+        else:
+            self.preview_mode_var.set("source")
+        self.update_preview_mode()
+        filename = self.current_download_name()
+        self.workspace_subtitle_var.set(self.response_subtitle(filename))
+        self.status_var.set(f"当前格式：{filename}")
+
+    def response_subtitle(self, filename: str) -> str:
+        if not self.latest_response:
+            return ""
+        result = self.latest_response
+        if result.wechat_chat:
+            subtitle = f"来自微信会话，导出字符 {result.wechat_exported_chars}。当前格式：{filename}。"
+        else:
+            subtitle = f"摘要已生成，可复制或导出为 {filename}。"
+        if result.engine in {"deepseek", "openai"}:
+            subtitle += f" AI 分块 {result.chunk_count}，调用 {result.ai_call_count} 次。"
+        return subtitle
 
     def apply_response(self, result: object) -> None:
         if not isinstance(result, service.SummaryResponse):
@@ -1675,12 +2040,14 @@ class DesktopApp(ttk.Frame):
         )
         if result.wechat_chat:
             self.workspace_title_var.set(result.wechat_chat)
-            self.workspace_subtitle_var.set(f"来自微信会话，导出字符 {result.wechat_exported_chars}。")
         else:
             title = Path(self.file_path_var.get()).name if self.file_path_var.get() else result.download_name
             self.workspace_title_var.set(title)
-            self.workspace_subtitle_var.set(f"摘要已生成，可复制或导出为 {result.download_name}。")
-        if not result.download_name.lower().endswith(".md"):
+        if not result.rendered_reports:
+            suffix = Path(result.download_name).suffix.lower()
+            self.format_var.set({".md": "markdown", ".txt": "txt", ".json": "json"}.get(suffix, "markdown"))
+        self.workspace_subtitle_var.set(self.response_subtitle(self.current_download_name()))
+        if self.active_output_format() != "markdown":
             self.preview_mode_var.set("source")
         else:
             self.preview_mode_var.set(self._markdown_preview_mode)
@@ -1698,17 +2065,89 @@ class DesktopApp(ttk.Frame):
     def export_report(self) -> None:
         if not self.latest_response:
             return
-        filename = self.latest_response.download_name
+        filename = self.current_download_name()
         path = filedialog.asksaveasfilename(
             title="导出摘要",
             initialfile=filename,
             defaultextension=Path(filename).suffix,
-            filetypes=(("Markdown", "*.md"), ("JSON", "*.json"), ("文本文件", "*.txt"), ("所有文件", "*.*")),
+            filetypes=(("当前摘要格式", f"*{Path(filename).suffix}"), ("所有文件", "*.*")),
         )
         if not path:
             return
         Path(path).write_text(self.current_report_text(), encoding="utf-8")
         self.status_var.set(f"已导出：{path}")
+
+    def export_all_reports(self) -> None:
+        if not self.has_all_formats() or not self.latest_response:
+            return
+        selected = filedialog.asksaveasfilename(
+            title="导出全部格式",
+            initialfile=Path(self.current_download_name()).stem,
+            defaultextension="",
+            filetypes=(("所有文件", "*.*"),),
+            confirmoverwrite=False,
+        )
+        if not selected:
+            return
+        try:
+            base_path = self.normalize_export_base_path(Path(selected))
+        except ValueError as exc:
+            messagebox.showerror("文件名无效", str(exc))
+            return
+
+        targets = {
+            "markdown": Path(f"{base_path}.md"),
+            "txt": Path(f"{base_path}.txt"),
+            "json": Path(f"{base_path}.json"),
+        }
+        existing = [path.name for path in targets.values() if path.exists()]
+        if existing and not messagebox.askyesno(
+            "覆盖文件",
+            "以下文件已存在：\n"
+            + "\n".join(existing)
+            + "\n\n是否覆盖全部三种格式？",
+        ):
+            return
+        try:
+            self.write_all_reports(targets)
+        except OSError as exc:
+            messagebox.showerror("导出失败", str(exc))
+            return
+        self.status_var.set(f"已导出三种格式：{base_path.parent}")
+
+    @staticmethod
+    def normalize_export_base_path(path: Path) -> Path:
+        name = path.name.strip()
+        if Path(name).suffix.lower() in {".md", ".txt", ".json"}:
+            name = Path(name).stem.strip()
+        if not name:
+            raise ValueError("文件名不能为空。")
+        if re.search(r'[<>:"/\\|?*\x00-\x1f]', name):
+            raise ValueError("文件名不能包含 < > : \" / \\ | ? * 等字符。")
+        if name.endswith((" ", ".")):
+            raise ValueError("文件名不能以空格或句点结尾。")
+        reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+        if name.upper() in reserved:
+            raise ValueError("该名称是 Windows 保留文件名，请更换名称。")
+        return path.with_name(name)
+
+    def write_all_reports(self, targets: dict[str, Path]) -> None:
+        if not self.latest_response:
+            return
+        temporary: list[tuple[Path, Path]] = []
+        try:
+            for output_format, target in targets.items():
+                temp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+                temp.write_text(self.latest_response.rendered_reports[output_format], encoding="utf-8")
+                temporary.append((temp, target))
+            for temp, target in temporary:
+                temp.replace(target)
+        finally:
+            for temp, _target in temporary:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

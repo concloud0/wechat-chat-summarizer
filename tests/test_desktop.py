@@ -114,7 +114,7 @@ class DesktopTests(unittest.TestCase):
         finally:
             root.destroy()
 
-    def test_deepseek_toggle_shows_config_and_forces_markdown(self):
+    def test_deepseek_toggle_shows_config_and_preserves_output_format(self):
         root, app = self.make_app()
         try:
             app.format_var.set("json")
@@ -123,13 +123,26 @@ class DesktopTests(unittest.TestCase):
             root.update_idletasks()
 
             self.assertTrue(app.deepseek_frame.grid_info())
-            self.assertEqual(app.format_var.get(), "markdown")
+            self.assertEqual(app.format_var.get(), "json")
 
             app.engine_var.set("local")
             app.update_engine_mode()
             root.update_idletasks()
 
             self.assertFalse(app.deepseek_frame.grid_info())
+        finally:
+            root.destroy()
+
+    def test_openai_toggle_shows_only_openai_config(self):
+        root, app = self.make_app()
+        try:
+            app.engine_var.set("openai")
+            app.update_engine_mode()
+            root.update_idletasks()
+
+            self.assertTrue(app.openai_frame.grid_info())
+            self.assertFalse(app.deepseek_frame.grid_info())
+            self.assertEqual(app.openai_effort_var.get(), "medium")
         finally:
             root.destroy()
 
@@ -210,6 +223,7 @@ class DesktopTests(unittest.TestCase):
         try:
             self.assertEqual(str(app.copy_button.cget("state")), "disabled")
             self.assertEqual(str(app.export_button.cget("state")), "disabled")
+            self.assertEqual(str(app.export_all_button.cget("state")), "disabled")
             self.assertEqual(str(app.output_text.cget("state")), "disabled")
 
             response = service.SummaryResponse(
@@ -229,6 +243,7 @@ class DesktopTests(unittest.TestCase):
 
             self.assertEqual(str(app.copy_button.cget("state")), "normal")
             self.assertEqual(str(app.export_button.cget("state")), "normal")
+            self.assertEqual(str(app.export_all_button.cget("state")), "disabled")
             self.assertEqual(str(app.output_text.cget("state")), "disabled")
             self.assertEqual(app.current_report_text(), response.report)
             self.assertEqual(app.meta_var.get(), "消息 3 · 成员 2 · 编码 utf-8 · 未识别 0")
@@ -270,6 +285,178 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(app.current_report_text(), report)
         finally:
             root.destroy()
+
+    def test_output_format_switch_uses_cached_reports_without_regeneration(self):
+        root, app = self.make_app()
+        try:
+            response = service.SummaryResponse(
+                report="# Markdown\n",
+                download_name="wechat_summary.md",
+                encoding="utf-8",
+                message_count=2,
+                speaker_count=1,
+                ignored_lines=0,
+                engine="deepseek",
+                model="deepseek-v4-pro",
+                thinking="enabled",
+                reasoning_effort="high",
+                source="file",
+                chunk_count=2,
+                ai_call_count=3,
+                rendered_reports={
+                    "markdown": "# Markdown\n",
+                    "txt": "纯文本\n",
+                    "json": '{"summary": "JSON"}\n',
+                },
+            )
+            app.apply_response(response)
+
+            self.assertEqual(app.current_report_text(), "# Markdown\n")
+            self.assertEqual(app.current_download_name(), "wechat_summary.md")
+            self.assertEqual(str(app.export_all_button.cget("state")), "normal")
+
+            app.format_var.set("json")
+            app.on_output_format_changed()
+            self.assertEqual(app.current_report_text(), '{"summary": "JSON"}\n')
+            self.assertEqual(app.current_download_name(), "wechat_summary.json")
+            self.assertEqual(app.preview_mode_var.get(), "source")
+            self.assertEqual(response.ai_call_count, 3)
+
+            app.format_var.set("txt")
+            app.on_output_format_changed()
+            self.assertEqual(app.output_text.get("1.0", "end-1c"), "纯文本\n")
+
+            app.format_var.set("markdown")
+            app.on_output_format_changed()
+            self.assertEqual(app.preview_mode_var.get(), "reading")
+            self.assertTrue(app.output_text.tag_ranges("h1"))
+        finally:
+            root.destroy()
+
+    def test_export_all_uses_custom_base_name_and_strips_known_extension(self):
+        root, app = self.make_app()
+        try:
+            response = service.SummaryResponse(
+                report="# Markdown\n",
+                download_name="wechat_summary.md",
+                encoding="utf-8",
+                message_count=1,
+                speaker_count=1,
+                ignored_lines=0,
+                engine="local",
+                model="local",
+                thinking="disabled",
+                reasoning_effort="",
+                source="file",
+                rendered_reports={
+                    "markdown": "# Markdown\n",
+                    "txt": "纯文本\n",
+                    "json": '{"ok": true}\n',
+                },
+            )
+            app.apply_response(response)
+            with tempfile.TemporaryDirectory() as directory:
+                selected = str(Path(directory) / "项目周报.json")
+                with mock.patch("wxchat_app.desktop.filedialog.asksaveasfilename", return_value=selected):
+                    app.export_all_reports()
+
+                self.assertEqual((Path(directory) / "项目周报.md").read_text(encoding="utf-8"), "# Markdown\n")
+                self.assertEqual((Path(directory) / "项目周报.txt").read_text(encoding="utf-8"), "纯文本\n")
+                self.assertEqual((Path(directory) / "项目周报.json").read_text(encoding="utf-8"), '{"ok": true}\n')
+                self.assertIn("已导出三种格式", app.status_var.get())
+        finally:
+            root.destroy()
+
+    def test_export_all_rejects_invalid_name_and_cancelled_overwrite(self):
+        root, app = self.make_app()
+        try:
+            response = service.SummaryResponse(
+                report="md",
+                download_name="wechat_summary.md",
+                encoding="utf-8",
+                message_count=1,
+                speaker_count=1,
+                ignored_lines=0,
+                engine="local",
+                model="local",
+                thinking="disabled",
+                reasoning_effort="",
+                source="file",
+                rendered_reports={"markdown": "md", "txt": "txt", "json": "json"},
+            )
+            app.apply_response(response)
+            with tempfile.TemporaryDirectory() as directory:
+                invalid = str(Path(directory) / "非法?名称")
+                with (
+                    mock.patch("wxchat_app.desktop.filedialog.asksaveasfilename", return_value=invalid),
+                    mock.patch("wxchat_app.desktop.messagebox.showerror") as showerror,
+                ):
+                    app.export_all_reports()
+                self.assertIn("文件名无效", showerror.call_args.args[0])
+
+                existing = Path(directory) / "周报.md"
+                existing.write_text("old", encoding="utf-8")
+                with (
+                    mock.patch(
+                        "wxchat_app.desktop.filedialog.asksaveasfilename",
+                        return_value=str(Path(directory) / "周报"),
+                    ),
+                    mock.patch("wxchat_app.desktop.messagebox.askyesno", return_value=False),
+                ):
+                    app.export_all_reports()
+                self.assertEqual(existing.read_text(encoding="utf-8"), "old")
+                self.assertFalse((Path(directory) / "周报.txt").exists())
+                self.assertFalse((Path(directory) / "周报.json").exists())
+        finally:
+            root.destroy()
+
+    def test_export_all_reports_write_failure_is_reported(self):
+        root, app = self.make_app()
+        try:
+            response = service.SummaryResponse(
+                report="md",
+                download_name="wechat_summary.md",
+                encoding="utf-8",
+                message_count=1,
+                speaker_count=1,
+                ignored_lines=0,
+                engine="local",
+                model="local",
+                thinking="disabled",
+                reasoning_effort="",
+                source="file",
+                rendered_reports={"markdown": "md", "txt": "txt", "json": "json"},
+            )
+            app.apply_response(response)
+            with tempfile.TemporaryDirectory() as directory:
+                with (
+                    mock.patch(
+                        "wxchat_app.desktop.filedialog.asksaveasfilename",
+                        return_value=str(Path(directory) / "周报"),
+                    ),
+                    mock.patch.object(app, "write_all_reports", side_effect=OSError("disk full")),
+                    mock.patch("wxchat_app.desktop.messagebox.showerror") as showerror,
+                ):
+                    app.export_all_reports()
+                self.assertEqual(showerror.call_args.args, ("导出失败", "disk full"))
+        finally:
+            root.destroy()
+
+    def test_export_base_name_validation(self):
+        self.assertEqual(
+            DesktopTests._normalized_name(Path("项目.周报.md")).name,
+            "项目.周报",
+        )
+        for invalid in ("", "CON", "坏|名称", "尾部."):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    DesktopTests._normalized_name(Path(invalid))
+
+    @staticmethod
+    def _normalized_name(path):
+        from wxchat_app.desktop import DesktopApp
+
+        return DesktopApp.normalize_export_base_path(path)
 
     def test_json_result_forces_source_preview(self):
         root, app = self.make_app()
@@ -369,8 +556,23 @@ class DesktopTests(unittest.TestCase):
             self.assertLessEqual(app.settings_panel.winfo_reqwidth(), app.settings_panel.master.winfo_reqwidth())
             self.assertLessEqual(app.controls_panel.winfo_reqwidth(), app.controls_panel.master.winfo_reqwidth())
             classes = self.widget_classes(app)
-            self.assertNotIn("TScrollbar", classes)
+            self.assertEqual(classes.count("TScrollbar"), 1)
             self.assertNotIn("TCombobox", classes)
+        finally:
+            root.destroy()
+
+    def test_preview_has_styled_vertical_scrollbar(self):
+        root, app = self.make_app()
+        try:
+            root.update_idletasks()
+            self.assertEqual(str(app.preview_scrollbar.cget("orient")), "vertical")
+            self.assertEqual(
+                app.preview_scrollbar.cget("style"),
+                "Preview.Vertical.TScrollbar",
+            )
+            self.assertTrue(app.preview_scrollbar.grid_info())
+            self.assertTrue(app.output_text.cget("yscrollcommand"))
+            self.assertTrue(app.preview_scrollbar.cget("command"))
         finally:
             root.destroy()
 
@@ -380,6 +582,68 @@ class DesktopTests(unittest.TestCase):
             app.wechat_combo.configure(values=("会话 A", "会话 B"))
             app.wechat_combo.select_value("会话 B")
             self.assertEqual(app.wechat_session_var.get(), "会话 B")
+        finally:
+            root.destroy()
+
+    def test_select_popup_is_owned_non_modal_and_single_instance(self):
+        root, app = self.make_app()
+        try:
+            root.deiconify()
+            root.update()
+            app.wechat_combo.configure(values=("会话 A", "会话 B"))
+            app.wechat_combo.open_menu()
+            root.update()
+            first_popup = app.wechat_combo._popup
+
+            self.assertIsNotNone(first_popup)
+            self.assertEqual(str(first_popup.transient()), str(root))
+            self.assertIsNone(root.grab_current())
+
+            app.wechat_combo.open_menu()
+            root.update()
+            self.assertIsNot(app.wechat_combo._popup, first_popup)
+            self.assertFalse(first_popup.winfo_exists())
+        finally:
+            root.destroy()
+
+    def test_select_popup_closes_when_owner_is_hidden_or_moved(self):
+        root, app = self.make_app()
+        try:
+            root.deiconify()
+            root.update()
+            app.wechat_combo.configure(values=("会话 A", "会话 B"))
+
+            app.wechat_combo.open_menu()
+            root.update()
+            root.geometry("+120+120")
+            root.update()
+            self.assertIsNone(app.wechat_combo._popup)
+            self.assertIsNone(root.grab_current())
+
+            app.wechat_combo.open_menu()
+            root.update()
+            root.withdraw()
+            root.update()
+            self.assertIsNone(app.wechat_combo._popup)
+            self.assertIsNone(root.grab_current())
+        finally:
+            root.destroy()
+
+    def test_select_popup_closes_before_owner_button_click_without_grab(self):
+        root, app = self.make_app()
+        try:
+            root.deiconify()
+            root.update()
+            app.wechat_combo.configure(values=("会话 A", "会话 B"))
+            app.wechat_combo.open_menu()
+            root.update()
+
+            self.assertIsNotNone(app.wechat_combo._popup)
+            self.assertIsNone(root.grab_current())
+            app.export_button.event_generate("<ButtonPress-1>")
+            root.update()
+            self.assertIsNone(app.wechat_combo._popup)
+            self.assertIsNone(root.grab_current())
         finally:
             root.destroy()
 
@@ -433,6 +697,36 @@ class DesktopTests(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_openai_key_visibility_and_connection_test(self):
+        root, app = self.make_app()
+        try:
+            self.assertEqual(app.openai_key_field.entry.cget("show"), "*")
+            app.toggle_openai_api_key_visibility()
+            self.assertEqual(app.openai_key_field.entry.cget("show"), "")
+            self.assertEqual(app.openai_key_visibility_button.cget("text"), "隐藏")
+
+            app.openai_key_var.set("openai-test-key")
+            captured = {}
+
+            def run_background(status, worker, callback):
+                captured["status"] = status
+                with mock.patch(
+                    "wxchat_app.summarizer.test_openai_connection",
+                    return_value="OK\n",
+                ) as api:
+                    callback(worker())
+                    captured["call"] = api.call_args
+
+            app.run_background = run_background
+            app.test_openai_connection()
+
+            self.assertEqual(captured["status"], "正在测试 OpenAI 连接...")
+            self.assertEqual(captured["call"].args[0], "openai-test-key")
+            self.assertEqual(captured["call"].kwargs["timeout"], 15)
+            self.assertEqual(app.status_var.get(), "OpenAI 连接成功。")
+        finally:
+            root.destroy()
+
     def test_missing_wechat_cli_shows_install_guidance(self):
         root, app = self.make_app()
         try:
@@ -465,7 +759,7 @@ class DesktopTests(unittest.TestCase):
         finally:
             root.destroy()
 
-    def test_busy_state_disables_and_restores_controls(self):
+    def test_busy_state_uses_modal_progress_without_washing_out_controls(self):
         root, app = self.make_app()
         try:
             member_field = next(
@@ -476,13 +770,17 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(str(member_field.entry.cget("state")), "normal")
             self.assertEqual(str(app.summarize_button.cget("state")), "normal")
             app.set_busy_state(True)
-            self.assertEqual(str(member_field.entry.cget("state")), "disabled")
-            self.assertEqual(str(app.summarize_button.cget("state")), "disabled")
+            self.assertEqual(str(member_field.entry.cget("state")), "normal")
+            self.assertEqual(str(app.summarize_button.cget("state")), "normal")
             self.assertEqual(str(app.copy_button.cget("state")), "disabled")
+            self.assertIsNotNone(app._busy_dialog)
+            self.assertIs(root.grab_current(), app._busy_dialog)
             app.set_busy_state(False)
             self.assertEqual(str(member_field.entry.cget("state")), "normal")
             self.assertEqual(str(app.summarize_button.cget("state")), "normal")
             self.assertEqual(str(app.copy_button.cget("state")), "disabled")
+            self.assertIsNone(app._busy_dialog)
+            self.assertIsNone(root.grab_current())
         finally:
             root.destroy()
 

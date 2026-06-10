@@ -28,6 +28,8 @@ class SettingsStoreTests(unittest.TestCase):
                 engine="deepseek",
                 deepseek_api_key="test-api-key-secret",
                 deepseek_effort="high",
+                openai_api_key="openai-api-key-secret",
+                openai_effort="xhigh",
                 advanced_expanded=True,
                 preview_mode="source",
             )
@@ -37,9 +39,12 @@ class SettingsStoreTests(unittest.TestCase):
             restored = store.load()
 
         self.assertNotIn("test-api-key-secret", raw)
+        self.assertNotIn("openai-api-key-secret", raw)
         self.assertEqual(restored.deepseek_api_key, "test-api-key-secret")
         self.assertEqual(restored.source, "wechat")
         self.assertEqual(restored.deepseek_effort, "high")
+        self.assertEqual(restored.openai_api_key, "openai-api-key-secret")
+        self.assertEqual(restored.openai_effort, "xhigh")
         self.assertTrue(restored.advanced_expanded)
         self.assertEqual(restored.preview_mode, "source")
 
@@ -51,6 +56,42 @@ class SettingsStoreTests(unittest.TestCase):
             payload = json.loads(store.path.read_text(encoding="utf-8"))
 
         self.assertNotIn("deepseek_api_key_protected", payload)
+
+    def test_clearing_openai_api_key_does_not_affect_deepseek_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            store.save(
+                settings.AppSettings(
+                    deepseek_api_key="deepseek-key",
+                    openai_api_key="openai-key",
+                )
+            )
+            store.save(
+                settings.AppSettings(
+                    deepseek_api_key="deepseek-key",
+                    openai_api_key="",
+                )
+            )
+            payload = json.loads(store.path.read_text(encoding="utf-8"))
+
+        self.assertIn("deepseek_api_key_protected", payload)
+        self.assertNotIn("openai_api_key_protected", payload)
+
+    def test_legacy_deepseek_efforts_are_migrated(self):
+        expected = {
+            "low": "high",
+            "medium": "high",
+            "xhigh": "max",
+            "max": "max",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            for legacy, migrated in expected.items():
+                store.path.write_text(
+                    json.dumps({"deepseek_effort": legacy}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(store.load().deepseek_effort, migrated)
 
     def test_invalid_values_fall_back_without_breaking_startup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -72,7 +113,7 @@ class SettingsStoreTests(unittest.TestCase):
 
         self.assertEqual(restored.source, "file")
         self.assertEqual(restored.engine, "deepseek")
-        self.assertEqual(restored.output_format, "markdown")
+        self.assertEqual(restored.output_format, "json")
         self.assertEqual(restored.encoding, "auto")
         self.assertEqual(restored.top_messages, "8")
         self.assertEqual(restored.deepseek_api_key, "")
@@ -85,3 +126,11 @@ class SettingsStoreTests(unittest.TestCase):
 
         self.assertEqual(restored.engine, "deepseek")
         self.assertEqual(restored.output_format, "markdown")
+
+    def test_txt_output_format_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            store.save(settings.AppSettings(output_format="txt"))
+            restored = store.load()
+
+        self.assertEqual(restored.output_format, "txt")

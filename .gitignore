@@ -15,6 +15,7 @@ server.out.log
 server.err.log
 summary.md
 summary.json
+summarytest/
 
 # Local continuity, smoke-test, and design artifacts that should not be
 # uploaded to a public release repository.

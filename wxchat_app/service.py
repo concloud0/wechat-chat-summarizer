@@ -24,7 +24,10 @@ class SummaryRequest:
     deepseek_api_key: str | None = None
     deepseek_base_url: str = summarizer.DEFAULT_DEEPSEEK_BASE_URL
     deepseek_thinking: bool = False
-    deepseek_reasoning_effort: str = "medium"
+    deepseek_reasoning_effort: str = "high"
+    openai_api_key: str | None = None
+    openai_base_url: str = summarizer.DEFAULT_OPENAI_BASE_URL
+    openai_reasoning_effort: str = "medium"
     max_input_chars: int = 60000
 
 
@@ -44,6 +47,9 @@ class SummaryResponse:
     wechat_chat: str = ""
     wechat_exported_chars: int = 0
     ignored_line_samples: tuple[tuple[int, str], ...] = ()
+    chunk_count: int = 1
+    ai_call_count: int = 0
+    rendered_reports: dict[str, str] = dataclasses.field(default_factory=dict)
 
     def to_api_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -59,6 +65,8 @@ class SummaryResponse:
             "reasoning_effort": self.reasoning_effort,
             "source": self.source,
             "download_name": self.download_name,
+            "chunk_count": self.chunk_count,
+            "ai_call_count": self.ai_call_count,
         }
         if self.wechat_chat:
             payload["wechat_chat"] = self.wechat_chat
@@ -92,7 +100,10 @@ def summary_request_from_fields(
             deepseek_api_key=clean_optional(fields.get("deepseek_api_key")),
             deepseek_base_url=fields.get("deepseek_base_url") or summarizer.DEFAULT_DEEPSEEK_BASE_URL,
             deepseek_thinking=fields.get("deepseek_thinking", "disabled") == "enabled",
-            deepseek_reasoning_effort=fields.get("deepseek_reasoning_effort") or "medium",
+            deepseek_reasoning_effort=fields.get("deepseek_reasoning_effort") or "high",
+            openai_api_key=clean_optional(fields.get("openai_api_key")),
+            openai_base_url=fields.get("openai_base_url") or summarizer.DEFAULT_OPENAI_BASE_URL,
+            openai_reasoning_effort=fields.get("openai_reasoning_effort") or "medium",
             max_input_chars=int(fields.get("max_input_chars") or "60000"),
         )
     )
@@ -106,8 +117,8 @@ def clean_optional(value: str | None) -> str | None:
 
 
 def normalize_request(request: SummaryRequest) -> SummaryRequest:
-    output_format = request.output_format if request.output_format in {"markdown", "json"} else "markdown"
-    engine = request.engine if request.engine in {"local", "deepseek"} else "local"
+    output_format = request.output_format if request.output_format in {"markdown", "txt", "json"} else "markdown"
+    engine = request.engine if request.engine in {"local", "deepseek", "openai"} else "local"
     top_messages = int(request.top_messages)
     if top_messages < 1:
         raise ValueError("每类摘录数量必须大于 0。")
@@ -122,7 +133,13 @@ def normalize_request(request: SummaryRequest) -> SummaryRequest:
         date_from=clean_optional(request.date_from),
         date_to=clean_optional(request.date_to),
         deepseek_base_url=request.deepseek_base_url or summarizer.DEFAULT_DEEPSEEK_BASE_URL,
-        deepseek_reasoning_effort=request.deepseek_reasoning_effort or "medium",
+        deepseek_reasoning_effort=summarizer.normalize_deepseek_reasoning_effort(
+            request.deepseek_reasoning_effort
+        ),
+        openai_base_url=request.openai_base_url or summarizer.DEFAULT_OPENAI_BASE_URL,
+        openai_reasoning_effort=summarizer.normalize_openai_reasoning_effort(
+            request.openai_reasoning_effort
+        ),
     )
 
 
@@ -179,10 +196,22 @@ def summarize_text(request: SummaryRequest) -> SummaryResponse:
     date_to = summarizer.parse_date_filter(request.date_to, end_of_day=True)
     messages = summarizer.filter_messages(parse_result.messages, date_from, date_to, list(request.speakers))
 
-    report, extension = build_report(messages, parse_result, request)
+    rendered_reports, chunk_count, ai_call_count = build_reports(messages, parse_result, request)
+    report = rendered_reports[request.output_format]
+    extension = output_extension(request.output_format)
     analysis = summarizer.analyze_messages(messages)
-    thinking = "enabled" if request.deepseek_thinking and request.engine == "deepseek" else "disabled"
-    reasoning_effort = request.deepseek_reasoning_effort if thinking == "enabled" else ""
+    if request.engine == "deepseek":
+        thinking = "enabled" if request.deepseek_thinking else "disabled"
+        reasoning_effort = request.deepseek_reasoning_effort if request.deepseek_thinking else ""
+        model = summarizer.DEFAULT_DEEPSEEK_MODEL
+    elif request.engine == "openai":
+        thinking = "enabled"
+        reasoning_effort = request.openai_reasoning_effort
+        model = summarizer.DEFAULT_OPENAI_MODEL
+    else:
+        thinking = "disabled"
+        reasoning_effort = ""
+        model = "local"
 
     return SummaryResponse(
         report=report,
@@ -192,37 +221,77 @@ def summarize_text(request: SummaryRequest) -> SummaryResponse:
         speaker_count=len(analysis.by_speaker),
         ignored_lines=parse_result.ignored_lines,
         engine=request.engine,
-        model=summarizer.DEFAULT_DEEPSEEK_MODEL if request.engine == "deepseek" else "local",
+        model=model,
         thinking=thinking,
         reasoning_effort=reasoning_effort,
         source=request.source,
         ignored_line_samples=parse_result.ignored_line_samples,
+        chunk_count=chunk_count,
+        ai_call_count=ai_call_count,
+        rendered_reports=rendered_reports,
     )
 
 
-def build_report(
+def output_extension(output_format: str) -> str:
+    return {"markdown": "md", "txt": "txt", "json": "json"}.get(output_format, "md")
+
+
+def build_reports(
     messages: list[summarizer.Message],
     parse_result: summarizer.ParseResult,
     request: SummaryRequest,
-) -> tuple[str, str]:
+) -> tuple[dict[str, str], int, int]:
     if request.engine == "deepseek":
-        return (
-            summarizer.build_deepseek_report(
-                messages,
-                request.top_messages,
-                api_key=request.deepseek_api_key,
-                model=summarizer.DEFAULT_DEEPSEEK_MODEL,
-                base_url=request.deepseek_base_url,
-                thinking_enabled=request.deepseek_thinking,
-                reasoning_effort=request.deepseek_reasoning_effort,
-                max_input_chars=request.max_input_chars,
-                parse_result=parse_result,
-            ),
-            "md",
+        result = summarizer.build_deepseek_summary(
+            messages,
+            request.top_messages,
+            api_key=request.deepseek_api_key,
+            model=summarizer.DEFAULT_DEEPSEEK_MODEL,
+            base_url=request.deepseek_base_url,
+            thinking_enabled=request.deepseek_thinking,
+            reasoning_effort=request.deepseek_reasoning_effort,
+            max_input_chars=request.max_input_chars,
+            parse_result=parse_result,
         )
-    if request.output_format == "json":
-        return summarizer.build_json_report(messages, parse_result), "json"
-    return summarizer.build_report(messages, request.top_messages, parse_result), "md"
+        return (
+            {
+                "markdown": summarizer.render_structured_markdown(result),
+                "txt": summarizer.render_structured_text(result),
+                "json": summarizer.render_structured_json(result),
+            },
+            result.chunk_count,
+            result.ai_call_count,
+        )
+    if request.engine == "openai":
+        result = summarizer.build_openai_summary(
+            messages,
+            request.top_messages,
+            api_key=request.openai_api_key,
+            model=summarizer.DEFAULT_OPENAI_MODEL,
+            base_url=request.openai_base_url,
+            reasoning_effort=request.openai_reasoning_effort,
+            max_input_chars=request.max_input_chars,
+            parse_result=parse_result,
+        )
+        return (
+            {
+                "markdown": summarizer.render_structured_markdown(result),
+                "txt": summarizer.render_structured_text(result),
+                "json": summarizer.render_structured_json(result),
+            },
+            result.chunk_count,
+            result.ai_call_count,
+        )
+    markdown = summarizer.build_report(messages, request.top_messages, parse_result)
+    return (
+        {
+            "markdown": markdown,
+            "txt": summarizer.markdown_to_plain_text(markdown),
+            "json": summarizer.build_json_report(messages, parse_result),
+        },
+        1,
+        0,
+    )
 
 
 def api_dict(response: SummaryResponse) -> dict[str, Any]:

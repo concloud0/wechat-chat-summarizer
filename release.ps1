@@ -16,7 +16,7 @@ if (-not (Test-Path $python)) {
 }
 
 $version = (& $python -c "from wxchat_app.version import APP_VERSION; print(APP_VERSION)").Trim()
-if ($version -ne "0.9.0") {
+if ($version -ne "0.10.0") {
   throw "Unexpected release version: $version"
 }
 

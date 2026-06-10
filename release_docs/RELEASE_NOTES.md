@@ -1,16 +1,23 @@
-# WeChat Chat Summarizer 0.9.0
+# WeChat Chat Summarizer 0.10.0
 
-发布日期：2026-06-07
+发布日期：2026-06-10
 
 本项目已按 MIT License 开源。
 
 ## 主要功能
 
 - 文本文件和可选微信会话摘要。
-- DeepSeek 与本地规则摘要引擎。
+- DeepSeek V4 Pro、GPT-5.5 与本地规则摘要引擎。
 - Markdown 阅读视图、源码视图、复制和导出。
 - 日期、成员、编码和摘录数量筛选。
-- DeepSeek API Key 的 Windows DPAPI 加密保存。
+- DeepSeek Key 与 OpenAI Key 分别使用 Windows DPAPI 加密保存。
+- GPT-5.5 Responses API、Strict Structured Outputs 和独立推理深度。
+- DeepSeek/GPT 统一结构化摘要、长聊天自动分块、递归合并与原文证据编号。
+- DeepSeek 空分歧字段可恢复处理，避免单个空占位项导致整份摘要失败。
+- Markdown、TXT、JSON 三种真实导出格式。
+- 单次生成后三格式即时切换，以及自定义基础名称的全部导出。
+- 摘要章节顺序优化，主要参与者紧跟总体概览。
+- 阅读预览增加与界面风格一致的细纵向滚动条。
 - 微信会话搜索、连接测试和未识别行诊断。
 
 ## 已知限制

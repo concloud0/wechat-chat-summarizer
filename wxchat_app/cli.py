@@ -33,6 +33,9 @@ def main(argv: list[str]) -> int:
         deepseek_base_url=args.deepseek_base_url,
         deepseek_thinking=args.deepseek_thinking,
         deepseek_reasoning_effort=args.deepseek_reasoning_effort,
+        openai_api_key=args.openai_api_key,
+        openai_base_url=args.openai_base_url,
+        openai_reasoning_effort=args.openai_reasoning_effort,
         max_input_chars=args.max_input_chars,
     )
 

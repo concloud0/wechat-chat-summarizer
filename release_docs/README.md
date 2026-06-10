@@ -1,8 +1,8 @@
-# 微信聊天摘要工具 0.9.0
+# 微信聊天摘要工具 0.10.0
 
 MIT 开源项目，面向 64 位 Windows 10/11 的个人工具试用版。
 
-> 如果只想运行程序，请下载 `WeChatChatSummarizer-0.9.0-win64.zip`。GitHub 自动生成的 `Source code (zip)` / `Source code (tar.gz)` 是源码包，不包含已打包好的 EXE。
+> 如果只想运行程序，请下载 `WeChatChatSummarizer-0.10.0-win64.zip`。GitHub 自动生成的 `Source code (zip)` / `Source code (tar.gz)` 是源码包，不包含已打包好的 EXE。
 
 ## 开始使用
 
@@ -14,16 +14,19 @@ MIT 开源项目，面向 64 位 Windows 10/11 的个人工具试用版。
 
 ## 摘要引擎
 
-- `deepseek`：默认模式。筛选后的聊天内容会发送到所配置的 DeepSeek API。
+- `deepseek`：默认模式。筛选后的聊天内容会发送到所配置的 DeepSeek API；长聊天会自动分块，关键事项附原文证据编号。
+- `openai`：固定使用 GPT-5.5 和 OpenAI Responses API，采用严格结构化输出；支持独立 OpenAI Key、Base URL 和推理深度。
 - `local`：只在本机处理，不上传聊天内容，摘要能力相对基础。
 
-API Key 使用 Windows DPAPI 当前用户作用域加密，保存在：
+一次摘要会缓存 Markdown、纯文本 TXT 和结构化 JSON。切换输出格式不会重复调用 AI；“全部导出”允许输入自定义基础名称并同时保存三种文件。
+
+DeepSeek Key 和 OpenAI Key 分别使用 Windows DPAPI 当前用户作用域加密，保存在：
 
 ```text
 %LOCALAPPDATA%\WeChatChatSummarizer\settings.json
 ```
 
-删除 `%LOCALAPPDATA%\WeChatChatSummarizer` 文件夹可清除 API Key 和全部本地设置。
+删除 `%LOCALAPPDATA%\WeChatChatSummarizer` 文件夹可清除两个 API Key 和全部本地设置。
 
 ## 微信会话直读
 
@@ -42,11 +45,15 @@ wechat-cli init
 
 ### 未知发布者
 
-0.9.0 试用版未购买代码签名证书。请从可信来源获取 ZIP，并在运行前核对 SHA256。
+0.10.0 试用版未购买代码签名证书。请从可信来源获取 ZIP，并在运行前核对 SHA256。
 
 ### DeepSeek 无法连接
 
 检查 API Key、API Base URL 和网络连接，可在应用内点击“测试连接”。
+
+### GPT-5.5 无法连接
+
+检查 OpenAI Key、OpenAI Base URL、账户额度和中转渠道状态。OpenAI 与 DeepSeek 的 Key 不能混用。
 
 ### 摘要内容不准确
 

@@ -19,13 +19,14 @@ from . import summarizer
 
 APP_DIR_NAME = "WeChatChatSummarizer"
 SETTINGS_FILE_NAME = "settings.json"
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 
 VALID_SOURCES = {"file", "wechat"}
 VALID_ENCODINGS = {"auto", "utf-8", "gb18030", "utf-16"}
-VALID_FORMATS = {"markdown", "json"}
-VALID_ENGINES = {"local", "deepseek"}
-VALID_EFFORTS = {"low", "medium", "high", "max"}
+VALID_FORMATS = {"markdown", "txt", "json"}
+VALID_ENGINES = {"local", "deepseek", "openai"}
+VALID_DEEPSEEK_EFFORTS = {"high", "max"}
+VALID_OPENAI_EFFORTS = {"low", "medium", "high", "xhigh"}
 VALID_PREVIEW_MODES = {"reading", "source"}
 
 
@@ -140,7 +141,10 @@ class AppSettings:
     deepseek_api_key: str = ""
     deepseek_base_url: str = summarizer.DEFAULT_DEEPSEEK_BASE_URL
     deepseek_thinking: bool = True
-    deepseek_effort: str = "medium"
+    deepseek_effort: str = "high"
+    openai_api_key: str = ""
+    openai_base_url: str = summarizer.DEFAULT_OPENAI_BASE_URL
+    openai_effort: str = "medium"
     max_input_chars: str = "60000"
     wechat_limit: str = "300"
     wechat_session_limit: str = "50"
@@ -179,12 +183,17 @@ class SettingsStore:
                 api_key = self.protector.unprotect(encrypted_key)
             except (OSError, ValueError, UnicodeError):
                 api_key = ""
+        openai_api_key = ""
+        encrypted_openai_key = payload.get("openai_api_key_protected")
+        if isinstance(encrypted_openai_key, str) and encrypted_openai_key:
+            try:
+                openai_api_key = self.protector.unprotect(encrypted_openai_key)
+            except (OSError, ValueError, UnicodeError):
+                openai_api_key = ""
 
         source = _choice(payload.get("source"), VALID_SOURCES, defaults.source)
         engine = _choice(payload.get("engine"), VALID_ENGINES, defaults.engine)
         output_format = _choice(payload.get("output_format"), VALID_FORMATS, defaults.output_format)
-        if engine == "deepseek":
-            output_format = "markdown"
 
         return AppSettings(
             source=source,
@@ -198,7 +207,14 @@ class SettingsStore:
             deepseek_api_key=api_key,
             deepseek_base_url=_url(payload.get("deepseek_base_url"), defaults.deepseek_base_url),
             deepseek_thinking=_boolean(payload.get("deepseek_thinking"), defaults.deepseek_thinking),
-            deepseek_effort=_choice(payload.get("deepseek_effort"), VALID_EFFORTS, defaults.deepseek_effort),
+            deepseek_effort=_deepseek_effort(payload.get("deepseek_effort"), defaults.deepseek_effort),
+            openai_api_key=openai_api_key,
+            openai_base_url=_url(payload.get("openai_base_url"), defaults.openai_base_url),
+            openai_effort=_choice(
+                payload.get("openai_effort"),
+                VALID_OPENAI_EFFORTS,
+                defaults.openai_effort,
+            ),
             max_input_chars=_integer_text(payload.get("max_input_chars"), defaults.max_input_chars, 1000, 1_000_000),
             wechat_limit=_integer_text(payload.get("wechat_limit"), defaults.wechat_limit, 1, 100_000),
             wechat_session_limit=_integer_text(payload.get("wechat_session_limit"), defaults.wechat_session_limit, 1, 500),
@@ -220,6 +236,8 @@ class SettingsStore:
             "deepseek_base_url": settings.deepseek_base_url,
             "deepseek_thinking": settings.deepseek_thinking,
             "deepseek_effort": settings.deepseek_effort,
+            "openai_base_url": settings.openai_base_url,
+            "openai_effort": settings.openai_effort,
             "max_input_chars": settings.max_input_chars,
             "wechat_limit": settings.wechat_limit,
             "wechat_session_limit": settings.wechat_session_limit,
@@ -228,6 +246,8 @@ class SettingsStore:
         }
         if settings.deepseek_api_key:
             payload["deepseek_api_key_protected"] = self.protector.protect(settings.deepseek_api_key)
+        if settings.openai_api_key:
+            payload["openai_api_key_protected"] = self.protector.protect(settings.openai_api_key)
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -246,6 +266,12 @@ class SettingsStore:
 
 def _choice(value: object, choices: set[str], default: str) -> str:
     return value if isinstance(value, str) and value in choices else default
+
+
+def _deepseek_effort(value: object, default: str) -> str:
+    if not isinstance(value, str):
+        return default
+    return summarizer.normalize_deepseek_reasoning_effort(value)
 
 
 def _text(value: object, default: str, max_length: int) -> str:
